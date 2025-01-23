@@ -1,0 +1,23 @@
+{
+  "name": "stackflow-server",
+  "version": "1.0.0",
+  "description": "Payment channel server built on the Stacks network.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "author": "Brice Dobry",
+  "license": "MIT",
+  "dependencies": {
+    "@stacks/blockchain-api-client": "^8.5.0",
+    "@stacks/network": "^7.0.2",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
