@@ -1,7 +1,13 @@
 const { verifySecret } = require("../utils/auth");
+const { CHANNEL_STATE, ACTION, OWNER } = require("../utils/constants");
 const pool = require("../utils/db");
-
-const owner = process.env.OWNER_ADDRESS;
+const {
+  getChannel,
+  insertChannel,
+  updateChannel,
+  getSignatures,
+  insertSignatures,
+} = require("../services/channelService");
 
 const EVENTS = {
   FUND_CHANNEL: "fund-channel",
@@ -13,152 +19,6 @@ const EVENTS = {
   WITHDRAW: "withdraw",
   DISPUTE_CLOSURE: "dispute-closure",
 };
-
-const CHANNEL_STATE = {
-  OPEN: "open",
-  CLOSED: "closed",
-};
-
-const ACTION = {
-  CLOSE: 0,
-  TRANSFER: 1,
-  DEPOSIT: 2,
-  WITHDRAW: 3,
-};
-
-/**
- * Helper: Check if the channel exists.
- */
-async function getChannel(client, principal1, principal2, token) {
-  try {
-    const query = `
-    SELECT *
-    FROM channels
-    WHERE principal_1 = $1
-      AND principal_2 = $2
-      ${token ? "AND token = $3" : "AND token IS NULL"}
-  `;
-    const params = token
-      ? [principal1, principal2, token]
-      : [principal1, principal2];
-    const result = await client.query(query, params);
-
-    // Handle case where no rows are returned
-    if (result.rowCount === 0) {
-      return null; // Explicitly return null if no channel is found
-    }
-
-    return result.rows[0]; // Return the channel data
-  } catch (error) {
-    console.error("Error fetching channel:", error);
-    throw error; // Re-throw the error to handle it at a higher level
-  }
-}
-
-/**
- * Insert a new channel.
- */
-async function insertChannel(
-  client,
-  principal1,
-  principal2,
-  token,
-  balance1,
-  balance2,
-  nonce,
-  expiresAt,
-  state
-) {
-  const channelId = await client.query(
-    `INSERT INTO channels (principal_1, principal_2, token, balance_1, balance_2, nonce, expires_at, state) 
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    RETURNING id`,
-    [
-      principal1,
-      principal2,
-      token || null,
-      balance1.toString(),
-      balance2.toString(),
-      nonce.toString(),
-      expiresAt.toString(),
-      state,
-    ]
-  );
-
-  return channelId.rows[0].id;
-}
-
-/**
- * Update a channel.
- */
-async function updateChannel(
-  client,
-  channelId,
-  balance1,
-  balance2,
-  nonce,
-  expiresAt,
-  state
-) {
-  await client.query(
-    `UPDATE channels 
-     SET balance_1 = $1, balance_2 = $2, nonce = $3, expires_at = $4, state = $5
-     WHERE id = $6`,
-    [
-      balance1.toString(),
-      balance2.toString(),
-      nonce.toString(),
-      expiresAt.toString(),
-      state,
-      channelId,
-    ]
-  );
-}
-
-/**
- * Get the signatures for a channel.
- */
-async function getSignatures(client, channelId) {
-  const result = await client.query(
-    `SELECT * FROM signatures WHERE channel = $1`,
-    [channelId]
-  );
-
-  if (result.rowCount === 0) {
-    return null;
-  }
-
-  return result.rows[0];
-}
-
-async function insertSignatures(
-  client,
-  channelId,
-  balance1,
-  balance2,
-  nonce,
-  action,
-  actor,
-  secret,
-  ownerSignature,
-  otherSignature
-) {
-  await client.query(
-    `INSERT INTO signatures (channel, balance_1, balance_2, nonce, action, actor, secret, owner_signature, other_signature) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [
-      channelId,
-      balance1.toString(),
-      balance2.toString(),
-      nonce.toString(),
-      action,
-      actor,
-      secret,
-      ownerSignature,
-      otherSignature,
-    ]
-  );
-}
 
 /**
  * Generic Event Processor.
@@ -192,7 +52,7 @@ async function processEvent(req, res, eventType, processor) {
             } = event.data.value;
 
             // If this channel doesn't involve the owner, we can ignore it
-            if (principal1 !== owner && principal2 !== owner) {
+            if (principal1 !== OWNER && principal2 !== OWNER) {
               console.info(`Ignoring fund-channel event not involving owner.`);
               continue; // Skip further processing for this event
             }
@@ -356,7 +216,7 @@ async function handleForceCancel(client, data) {
   } = data;
 
   // If the sender is the owner, then there is nothing to do
-  if (sender === owner) {
+  if (sender === OWNER) {
     console.info(`Ignoring force-cancel event from the owner.`);
     return; // Skip further processing for this event
   }
@@ -377,9 +237,9 @@ async function handleForceCancel(client, data) {
     // If we have signatures, submit a call to `dispute-closure`
     if (signatures) {
       // If our balance is higher than the cancellation balance, we can dispute
-      const cancelBalance = owner === principal1 ? balance1 : balance2;
+      const cancelBalance = OWNER === principal1 ? balance1 : balance2;
       const signatureBalance =
-        owner === principal1 ? signatures.balance_1 : signatures.balance_2;
+        OWNER === principal1 ? signatures.balance_1 : signatures.balance_2;
 
       if (BigInt(signatureBalance) > BigInt(cancelBalance)) {
         // Submit a call to the contract to dispute the closure
@@ -426,7 +286,7 @@ async function handleForceClose(client, data) {
   } = data;
 
   // If the sender is the owner, then there is nothing to do
-  if (sender === owner) {
+  if (sender === OWNER) {
     console.info(`Ignoring force-close event from the owner.`);
     return; // Skip further processing for this event
   }
@@ -447,9 +307,9 @@ async function handleForceClose(client, data) {
     // If we have signatures, submit a call to `dispute-closure`
     if (signatures) {
       // If our balance is higher than the cancellation balance, we can dispute
-      const cancelBalance = owner === principal1 ? balance1 : balance2;
+      const cancelBalance = OWNER === principal1 ? balance1 : balance2;
       const signatureBalance =
-        owner === principal1 ? signatures.balance_1 : signatures.balance_2;
+        OWNER === principal1 ? signatures.balance_1 : signatures.balance_2;
 
       if (BigInt(signatureBalance) > BigInt(cancelBalance)) {
         // Submit a call to the contract to dispute the closure
@@ -602,7 +462,7 @@ async function handleDeposit(client, data) {
 
   let ownerSignature = mySignature;
   let otherSignature = theirSignature;
-  if (sender !== owner) {
+  if (sender !== OWNER) {
     ownerSignature = theirSignature;
     otherSignature = mySignature;
   }
@@ -692,7 +552,7 @@ async function handleWithdraw(client, data) {
 
   let ownerSignature = mySignature;
   let otherSignature = theirSignature;
-  if (sender !== owner) {
+  if (sender !== OWNER) {
     ownerSignature = theirSignature;
     otherSignature = mySignature;
   }

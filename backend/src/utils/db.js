@@ -29,7 +29,7 @@ async function createTables() {
     await client.query(`
       CREATE TABLE IF NOT EXISTS signatures (
         id SERIAL PRIMARY KEY,
-        channel INTEGER REFERENCES channels(id),
+        channel INTEGER NOT NULL UNIQUE REFERENCES channels(id) ON DELETE CASCADE,
         balance_1 TEXT,
         balance_2 TEXT,
         nonce TEXT,

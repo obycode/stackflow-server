@@ -3,6 +3,7 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ownerRoutes = require("./routes/ownerRoutes");
 const eventRoutes = require("./routes/eventRoutes");
+const apiRoutes = require("./routes/apiRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 8888;
@@ -13,6 +14,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 
 // Routes
 app.use("/event", eventRoutes);
+app.use("/api", apiRoutes);
 app.use("/api/owner", ownerRoutes);
 
 // Health check
