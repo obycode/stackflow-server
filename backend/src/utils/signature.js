@@ -1,11 +1,10 @@
-const { createHash } = require("crypto");
 require("dotenv").config();
 const {
   Cl,
-  serializeCV,
   signWithKey,
   ClarityType,
   fetchCallReadOnlyFunction,
+  signStructuredData,
 } = require("@stacks/transactions");
 const {
   STACKFLOW_CONTRACT_ADDRESS,
@@ -66,39 +65,11 @@ async function verifySignature(
   return result.type === ClarityType.BoolTrue;
 }
 
-const structuredDataPrefix = Buffer.from([0x53, 0x49, 0x50, 0x30, 0x31, 0x38]);
-
-function sha256(data) {
-  return createHash("sha256").update(data).digest();
-}
-
-function structuredDataHash(structuredData) {
-  return sha256(Buffer.from(serializeCV(structuredData)));
-}
-
-function domainHash(chainId) {
-  return structuredDataHash(
-    Cl.tuple({
-      name: Cl.stringAscii("StackFlow"),
-      version: Cl.stringAscii("0.2.2"),
-      "chain-id": Cl.uint(chainId),
-    })
-  );
-}
-
-function signStructuredData(privateKey, structuredData, chainId) {
-  const messageHash = structuredDataHash(structuredData);
-  const input = sha256(
-    Buffer.concat([structuredDataPrefix, domainHash(chainId), messageHash])
-  );
-  const data = signWithKey(privateKey, input.toString("hex"));
-  return Buffer.from(data.slice(2) + data.slice(0, 2), "hex");
-}
-
-// Generate a signature for a message with these parameters.
+// Generate a signature for a message with these parameters by calling the
+// `make-structured-data-hash` read-only function on the contract.
 // Note: if you have the secret, you can generate the `hashedSecret` by calling
 // `sha256(Buffer.from(secret, "hex"))`
-async function generateSignature(
+async function generateSignatureContract(
   privateKey,
   token,
   myPrincipal,
@@ -158,7 +129,10 @@ async function generateSignature(
   return Buffer.from(signature.slice(2) + signature.slice(0, 2), "hex");
 }
 
-function generateSignatureNative(
+// Generate a signature for a message with these parameters using stacks.js.
+// Note: if you have the secret, you can generate the `hashedSecret` by calling
+// `sha256(Buffer.from(secret, "hex"))`
+function generateSignature(
   privateKey,
   token,
   myPrincipal,
@@ -168,7 +142,7 @@ function generateSignatureNative(
   nonce,
   action,
   actor = null,
-  secret = null,
+  hashedSecret = null,
   network
 ) {
   const meFirst = myPrincipal < theirPrincipal;
@@ -182,12 +156,11 @@ function generateSignatureNative(
       ? Cl.none()
       : Cl.some(Cl.contractPrincipal(token[0], token[1]));
   const actorCV = actor === null ? Cl.none() : Cl.some(Cl.principal(actor));
-  const secretCV =
-    secret === null
-      ? Cl.none()
-      : Cl.some(Cl.buffer(sha256(Buffer.from(secret, "hex"))));
+  const hashedSecretCV = hashedSecret
+    ? Cl.some(Cl.buffer(hashedSecret))
+    : Cl.none();
 
-  const data = Cl.tuple({
+  const message = Cl.tuple({
     token: tokenCV,
     "principal-1": Cl.principal(principal1),
     "principal-2": Cl.principal(principal2),
@@ -196,9 +169,17 @@ function generateSignatureNative(
     nonce: Cl.uint(nonce),
     action: Cl.uint(action),
     actor: actorCV,
-    "hashed-secret": secretCV,
+    "hashed-secret": hashedSecretCV,
   });
-  return signStructuredData(privateKey, data, network.chainId);
+
+  let domain = Cl.tuple({
+    name: Cl.stringAscii("StackFlow"),
+    version: Cl.stringAscii("0.2.2"),
+    "chain-id": Cl.uint(network.chainId),
+  });
+
+  let signature = signStructuredData({ message, domain, privateKey });
+  return Buffer.from(signature, "hex");
 }
 
 module.exports = {
