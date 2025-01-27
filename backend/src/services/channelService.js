@@ -52,7 +52,7 @@ async function insertChannel(
       balance1.toString(),
       balance2.toString(),
       nonce.toString(),
-      expiresAt.toString(),
+      expiresAt?.toString() ?? null,
       state,
     ]
   );
@@ -80,7 +80,7 @@ async function updateChannel(
       balance1.toString(),
       balance2.toString(),
       nonce.toString(),
-      expiresAt.toString(),
+      expiresAt?.toString() ?? null,
       state,
       channelId,
     ]

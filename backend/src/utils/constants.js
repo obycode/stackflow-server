@@ -54,6 +54,7 @@ function getNetwork() {
 }
 
 const NETWORK = getNetwork();
+const STACKS_API_KEY = process.env.STACKS_API_KEY;
 
 module.exports = {
   CHANNEL_STATE,
@@ -63,4 +64,5 @@ module.exports = {
   STACKFLOW_CONTRACT_ADDRESS,
   STACKFLOW_CONTRACT_NAME,
   NETWORK,
+  STACKS_API_KEY,
 };

@@ -10,7 +10,9 @@ const {
   STACKFLOW_CONTRACT_ADDRESS,
   STACKFLOW_CONTRACT_NAME,
   OWNER,
+  STACKS_API_KEY,
 } = require("./constants");
+const { setFetchOptions } = require("@stacks/common");
 
 // Verify a signature for a message with these parameters.
 // Note: if you have the secret, you can generate the `hashedSecret` by calling
@@ -34,6 +36,13 @@ async function verifySignature(
   const principal2 = meFirst ? theirPrincipal : myPrincipal;
   const balance1 = meFirst ? myBalance : theirBalance;
   const balance2 = meFirst ? theirBalance : myBalance;
+
+  // Setup API key middleware
+  setFetchOptions({
+    headers: {
+      "x-api-key": STACKS_API_KEY,
+    },
+  });
 
   // Make a call to the read-only function, `verify-signature`, on the contract
   const options = {

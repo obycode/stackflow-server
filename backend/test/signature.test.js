@@ -32,7 +32,7 @@ describe("Signature Tests", () => {
     myPrincipal: address,
     theirPrincipal:
       NETWORK == STACKS_MAINNET
-        ? "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV"
+        ? "SP1691R3BDYFTGA0638KRB4CBRVFX7X1HF0FQSX5Z"
         : "STNHKEPYEPJ8ET55ZZ0M5A34J0R3N5FM2CMMMAZ6",
     myBalance: 1300000,
     theirBalance: 1700000,
@@ -48,7 +48,7 @@ describe("Signature Tests", () => {
     myPrincipal: address,
     theirPrincipal:
       NETWORK == STACKS_MAINNET
-        ? "SP126XFZQ3ZHYM6Q6KAQZMMJSDY91A8BTT6AD08RV"
+        ? "SP1691R3BDYFTGA0638KRB4CBRVFX7X1HF0FQSX5Z"
         : "STNHKEPYEPJ8ET55ZZ0M5A34J0R3N5FM2CMMMAZ6",
     myBalance: 1300000,
     theirBalance: 1700000,

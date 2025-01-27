@@ -8,9 +8,9 @@ const {
 
 const router = express.Router();
 
-router.post("transfer", handleTransfer);
-router.post("deposit", handleDeposit);
-router.post("withdraw", handleWithdraw);
-router.post("close", handleClose);
+router.post("/transfer", handleTransfer);
+router.post("/deposit", handleDeposit);
+router.post("/withdraw", handleWithdraw);
+router.post("/close", handleClose);
 
 module.exports = router;
