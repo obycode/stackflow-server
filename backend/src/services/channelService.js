@@ -1,3 +1,5 @@
+const { get } = require("../routes/ownerRoutes");
+
 /**
  * Helper: Check if the channel exists.
  */
@@ -24,6 +26,23 @@ async function getChannel(client, principal1, principal2, token) {
   } catch (error) {
     console.error("Error fetching channel:", error);
     throw error; // Re-throw the error to handle it at a higher level
+  }
+}
+
+async function getChannelsWith(client, principal) {
+  try {
+    const query = `
+    SELECT *
+    FROM channels
+    WHERE principal_1 = $1
+    OR principal_2 = $1
+  `;
+    const result = await client.query(query, [principal]);
+
+    return result.rows;
+  } catch (error) {
+    console.error("Error fetching channels:", error);
+    throw error;
   }
 }
 
@@ -260,6 +279,7 @@ async function confirmSignatures(client, channelId, nonce, secret) {
 
 module.exports = {
   getChannel,
+  getChannelsWith,
   insertChannel,
   updateChannel,
   getSignatures,

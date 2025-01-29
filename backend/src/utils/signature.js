@@ -98,9 +98,12 @@ async function generateSignatureContract(
   const balance2 = meFirst ? theirBalance : myBalance;
 
   const tokenCV =
-    token === null
+    token == null
       ? Cl.none()
-      : Cl.some(Cl.contractPrincipal(token[0], token[1]));
+      : (() => {
+          const [contractAddress, contractName] = token.split(".");
+          return Cl.some(Cl.contractPrincipal(contractAddress, contractName));
+        })();
   const actorCV = actor === null ? Cl.none() : Cl.some(Cl.principal(actor));
   const hashedSecretCV = hashedSecret
     ? Cl.some(Cl.buffer(hashedSecret))
@@ -161,9 +164,12 @@ function generateSignature(
   const balance2 = meFirst ? theirBalance : myBalance;
 
   const tokenCV =
-    token === null
+    token == null
       ? Cl.none()
-      : Cl.some(Cl.contractPrincipal(token[0], token[1]));
+      : (() => {
+          const [contractAddress, contractName] = token.split(".");
+          return Cl.some(Cl.contractPrincipal(contractAddress, contractName));
+        })();
   const actorCV = actor === null ? Cl.none() : Cl.some(Cl.principal(actor));
   const hashedSecretCV = hashedSecret
     ? Cl.some(Cl.buffer(hashedSecret))

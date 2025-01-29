@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { AppConfig, UserSession, showConnect } from "@stacks/connect";
+import {
+  AppConfig,
+  UserSession,
+  openStructuredDataSignatureRequestPopup,
+  showConnect,
+} from "@stacks/connect";
+import { Cl } from "@stacks/transactions";
+import { STACKS_MAINNET } from "@stacks/network";
 import axios from "axios";
 import Modal from "react-modal";
+import UserView from "./components/UserView";
+import OwnerView from "./components/OwnerView";
 
 const appConfig = new AppConfig(["store_write", "publish_data"]);
 const userSession = new UserSession({ appConfig });
@@ -52,6 +61,73 @@ function App() {
     }
   };
 
+  const adjustBalances = (channel, action) => {
+    const { balance_1, balance_2 } = channel;
+    const sender = userSession.loadUserData().profile.stxAddress.mainnet;
+    const senderFirst = channel.principal_1 === sender;
+    const amountInt = parseInt(amount);
+
+    const balanceAdjustments = {
+      deposit: [amountInt, 0],
+      withdraw: [0, -amountInt],
+      transfer: [-amountInt, amountInt],
+    };
+
+    if (!balanceAdjustments[action]) {
+      throw new Error("Invalid action type");
+    }
+
+    const [adjust1, adjust2] = senderFirst
+      ? balanceAdjustments[action]
+      : balanceAdjustments[action].reverse();
+
+    return {
+      balance_1: parseInt(balance_1) + adjust1,
+      balance_2: parseInt(balance_2) + adjust2,
+    };
+  };
+
+  const domain = Cl.tuple({
+    name: Cl.stringAscii("StackFlow"),
+    version: Cl.stringAscii("0.2.2"),
+    "chain-id": Cl.uint(STACKS_MAINNET.chainId),
+  });
+
+  const actionMap = {
+    close: 0,
+    transfer: 1,
+    deposit: 2,
+    withdraw: 3,
+  };
+
+  const buildMessage = (action, channel) => {
+    const { balance_1, balance_2 } = adjustBalances(channel, action);
+
+    const tokenCV =
+      channel.token === null
+        ? Cl.none()
+        : (() => {
+            const [contractAddress, contractName] = channel.token.split(".");
+            return Cl.some(Cl.contractPrincipal(contractAddress, contractName));
+          })();
+    const actorCV = Cl.some(Cl.principal(user.profile.stxAddress.mainnet));
+    const hashedSecretCV = Cl.none(); // TODO: handle secrets
+
+    const message = Cl.tuple({
+      token: tokenCV,
+      "principal-1": Cl.principal(channel.principal_1),
+      "principal-2": Cl.principal(channel.principal_2),
+      "balance-1": Cl.uint(balance_1),
+      "balance-2": Cl.uint(balance_2),
+      nonce: Cl.uint(channel.nonce),
+      action: Cl.uint(actionMap[action]),
+      actor: actorCV,
+      "hashed-secret": hashedSecretCV,
+    });
+
+    return message;
+  };
+
   const handleAction = async (action, channel) => {
     if (!amount) return alert("Enter an amount");
     try {
@@ -59,17 +135,25 @@ function App() {
         amount: parseInt(amount),
         "principal-1": channel.principal_1,
         "principal-2": channel.principal_2,
-        "balance-1": channel.balance_1,
-        "balance-2": channel.balance_2,
-        nonce: channel.nonce + 1,
-        signature: "PLACEHOLDER_SIGNATURE", // This should be signed by the user
+        nonce: parseInt(channel.nonce) + 1,
       };
-      const endpoint = action === "transfer" ? "/transfer" : `/${action}`;
+      const { balance_1, balance_2 } = adjustBalances(channel, action);
+      payload["balance-1"] = balance_1;
+      payload["balance-2"] = balance_2;
 
-      await axios.post(`${API_BASE_URL}${endpoint}`, payload);
-      alert(`${action} successful`);
-      fetchChannels(user.profile.stxAddress.mainnet);
-      setModal({ open: false });
+      const signOptions = {
+        message: buildMessage(action, channel),
+        domain,
+        network: STACKS_MAINNET,
+        onFinish: async (signature) => {
+          payload.signature = signature.signature;
+          await axios.post(`${API_BASE_URL}/${action}`, payload);
+          alert(`${action} successful`);
+          fetchChannels(user.profile.stxAddress.mainnet);
+          setModal({ open: false });
+        },
+      };
+      openStructuredDataSignatureRequestPopup(signOptions);
     } catch (err) {
       console.error(`Error processing ${action}:`, err);
     }
@@ -135,84 +219,6 @@ function App() {
           </div>
         </Modal>
       )}
-    </div>
-  );
-}
-
-function OwnerView({ channels, setModal }) {
-  return (
-    <div>
-      <h2 className="text-lg font-semibold mt-4">Your Open Channels</h2>
-      <button className="bg-green-500 text-white p-2 rounded mt-2">
-        Open New Channel
-      </button>
-      {channels.length === 0 ? (
-        <p>No open channels</p>
-      ) : (
-        channels.map((channel) => (
-          <ChannelCard key={channel.id} channel={channel} setModal={setModal} />
-        ))
-      )}
-    </div>
-  );
-}
-
-function UserView({ channels, setModal }) {
-  return (
-    <div>
-      <h2 className="text-lg font-semibold mt-4">Your Channel</h2>
-      {channels.length === 0 ? (
-        <button className="bg-green-500 text-white p-2 rounded mt-2">
-          Open Channel
-        </button>
-      ) : (
-        channels.map((channel) => (
-          <ChannelCard key={channel.id} channel={channel} setModal={setModal} />
-        ))
-      )}
-    </div>
-  );
-}
-
-function ChannelCard({ channel, setModal }) {
-  return (
-    <div className="border p-4 mt-2 rounded">
-      <p>
-        <strong>Channel:</strong> {channel.principal_1} ↔ {channel.principal_2}
-      </p>
-      <p>
-        <strong>Balance:</strong> {channel.balance_1} STX / {channel.balance_2}{" "}
-        STX
-      </p>
-      <p>
-        <strong>Nonce:</strong> {channel.nonce}
-      </p>
-      <div className="flex space-x-2 mt-2">
-        <button
-          className="bg-blue-500 text-white p-1 rounded"
-          onClick={() => setModal({ open: true, type: "transfer", channel })}
-        >
-          Transfer
-        </button>
-        <button
-          className="bg-green-500 text-white p-1 rounded"
-          onClick={() => setModal({ open: true, type: "deposit", channel })}
-        >
-          Deposit
-        </button>
-        <button
-          className="bg-yellow-500 text-white p-1 rounded"
-          onClick={() => setModal({ open: true, type: "withdraw", channel })}
-        >
-          Withdraw
-        </button>
-        <button
-          className="bg-red-500 text-white p-1 rounded"
-          onClick={() => setModal({ open: true, type: "close", channel })}
-        >
-          Close
-        </button>
-      </div>
     </div>
   );
 }

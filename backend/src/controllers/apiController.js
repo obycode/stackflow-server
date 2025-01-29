@@ -9,6 +9,7 @@ const pool = require("../utils/db");
 const { verifySignature, generateSignature } = require("../utils/signature");
 const {
   getChannel,
+  getChannelsWith,
   insertSignatures,
   updateChannel,
 } = require("../services/channelService");
@@ -449,9 +450,28 @@ async function handleClose(req, res) {
   }
 }
 
+async function handleChannels(req, res) {
+  const { principal } = req.query;
+
+  let client;
+  try {
+    client = await pool.connect();
+
+    const channels = await getChannelsWith(client, principal);
+
+    res.status(200).json(channels);
+  } catch (error) {
+    console.error("Error fetching channels:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   handleTransfer,
   handleDeposit,
   handleWithdraw,
   handleClose,
+  handleChannels,
 };

@@ -12,5 +12,5 @@ function identifyBalances(principal1, owner, balance1, balance2, channel) {
 }
 
 module.exports = {
-  getBalances: identifyBalances,
+  identifyBalances,
 };
