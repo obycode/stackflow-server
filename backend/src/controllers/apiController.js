@@ -13,24 +13,24 @@ const {
   updateChannel,
 } = require("../services/channelService");
 
-// Sample curl command for testing:
-// ```sh
-// curl -X POST http://localhost:8888/api/transfer \
-// -H "Content-Type: application/json" \
-// -d '{
-//   "amount": 100000,
-//   "token": null,
-//   "principal-1": "SP1SJ3DTE5DN7X54YDH5D64R3BCB6A2AG2XG1V316",
-//   "principal-2": "SP1691R3BDYFTGA0638KRB4CBRVFX7X1HF0FQSX5Z",
-//   "balance-1": 1300000,
-//   "balance-2": 1700000,
-//   "nonce": 1,
-//   "hashed-secret": null,
-//   "signature": "bdd4cbc726acefac6d47ba86cb7f3324ef68fe45af131e08d3f0c3f5dcb184271f205d8baf09a078076afcebfbd754b2c24d4a2fef0448909bacafdcd86d3b3900",
-//   "next-hops": null,
-//   "next-hop": null
-// }'
-// ```
+function getBalances(principal1, owner, balance1, balance2, channel) {
+  const isOwnerFirst = principal1 === owner;
+
+  return {
+    myBalance: BigInt(isOwnerFirst ? balance1 : balance2),
+    theirBalance: BigInt(isOwnerFirst ? balance2 : balance1),
+    myPrevBalance: BigInt(isOwnerFirst ? channel.balance_1 : channel.balance_2),
+    theirPrevBalance: BigInt(
+      isOwnerFirst ? channel.balance_2 : channel.balance_1
+    ),
+  };
+}
+
+/// Handle POST /api/transfer
+/// This function is responsible for handling a transfer to `OWNER` from a
+/// channel participant. It will validate the transfer parameters and then
+/// verify the signature. If the signature is valid, it will update the channel
+/// state and return the owner's signature.
 async function handleTransfer(req, res) {
   const {
     amount,
@@ -46,8 +46,9 @@ async function handleTransfer(req, res) {
     "next-hop": nextHop,
   } = req.body;
 
+  let client;
   try {
-    const client = await pool.connect();
+    client = await pool.connect();
     await client.query("BEGIN");
 
     const channel = await getChannel(client, principal1, principal2, token);
@@ -62,20 +63,11 @@ async function handleTransfer(req, res) {
       return res.status(409).json({ error: "Nonce conflict.", channel });
     }
 
-    // We will only automatically sign off on an incoming transfer and the
-    // balances must be correct.
-    const myBalance =
-      principal1 === OWNER ? BigInt(balance1) : BigInt(balance2);
-    const theirBalance =
-      principal1 === OWNER ? BigInt(balance2) : BigInt(balance1);
-    const myPrevBalance =
-      principal1 === OWNER
-        ? BigInt(channel.balance_1)
-        : BigInt(channel.balance_2);
-    const theirPrevBalance =
-      principal1 === OWNER
-        ? BigInt(channel.balance_2)
-        : BigInt(channel.balance_1);
+    // We will only automatically sign off on an incoming transfer. The
+    // new balances must be correct.
+    const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
+      getBalances(principal1, OWNER, balance1, balance2, channel);
+
     if (
       myPrevBalance + BigInt(amount) !== myBalance ||
       theirPrevBalance - BigInt(amount) !== theirBalance
@@ -106,7 +98,7 @@ async function handleTransfer(req, res) {
       NETWORK
     );
 
-    if (!isValid || BigInt(nonce) <= BigInt(channel.nonce)) {
+    if (!isValid) {
       return res.status(403).json({ error: "Invalid transfer signature." });
     }
 
@@ -162,11 +154,19 @@ async function handleTransfer(req, res) {
     await client.query("COMMIT");
     res.status(200).json({ signature: ownerSignatureString });
   } catch (error) {
+    await client.query("ROLLBACK"); // Ensure rollback on failure
     console.error("Error handling transfer:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    client.release();
   }
 }
 
+/// Handle POST /api/deposit
+/// This function is responsible for handling a deposit to a channel. It will
+/// validate the deposit parameters and then verify the signature. If the
+/// signature is valid, it will return a signature from the owner. The channel
+/// state will be updated once the `deposit` function is successfully called.
 async function handleDeposit(req, res) {
   const {
     amount,
@@ -179,9 +179,9 @@ async function handleDeposit(req, res) {
     signature,
   } = req.body;
 
+  let client;
   try {
-    const client = await pool.connect();
-    await client.query("BEGIN");
+    client = await pool.connect();
 
     const channel = await getChannel(client, principal1, principal2, token);
 
@@ -189,47 +189,75 @@ async function handleDeposit(req, res) {
       return res.status(403).json({ error: "Channel does not exist." });
     }
 
+    const sender = principal1 === OWNER ? principal2 : principal1;
+
     if (BigInt(nonce) <= BigInt(channel.nonce)) {
       return res.status(409).json({ error: "Nonce conflict." });
     }
 
-    // Validate the deposit action
+    // Verify that the deposit is valid
+    const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
+      getBalances(principal1, OWNER, balance1, balance2, channel);
+    if (
+      myPrevBalance !== myBalance ||
+      theirPrevBalance + BigInt(amount) !== theirBalance
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Invalid deposit balance.", channel });
+    }
+
+    // Verify the deposit signature
+    const signatureBuffer = Buffer.from(signature, "hex");
     const isValid = verifySignature(
-      signature,
-      { balance1, balance2, nonce, amount },
-      principal2
+      signatureBuffer,
+      sender,
+      token,
+      OWNER,
+      sender,
+      myBalance,
+      theirBalance,
+      nonce,
+      ACTION.DEPOSIT,
+      sender,
+      null,
+      NETWORK
     );
 
     if (!isValid) {
       return res.status(403).json({ error: "Invalid deposit signature." });
     }
 
-    // Add the signature to the database
+    // Respond with the owner's signature
     const ownerSignature = generateSignature(
-      { balance1, balance2, nonce, amount },
-      principal1
-    );
-    await insertSignatures(
-      client,
-      channel.id,
-      balance1,
-      balance2,
+      PRIVATE_KEY,
+      token,
+      OWNER,
+      sender,
+      myBalance,
+      theirBalance,
       nonce,
-      "deposit",
-      principal2,
+      ACTION.DEPOSIT,
+      sender,
       null,
-      ownerSignature,
-      signature
+      NETWORK
     );
+    const ownerSignatureString = ownerSignature.toString("hex");
 
-    await client.query("COMMIT");
-    res.status(200).json({ signature: ownerSignature });
+    res.status(200).json({ signature: ownerSignatureString });
   } catch (error) {
     console.error("Error handling deposit:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    client.release();
   }
 }
 
+/// Handle POST /api/withdraw
+/// This function is responsible for handling a withdrawal from a channel. It
+/// will validate the withdraw parameters and then verify the signature. If the
+/// signature is valid, it will return a signature from the owner. The channel
+/// state will be updated once the `withdraw` function is successfully called.
 async function handleWithdraw(req, res) {
   const {
     amount,
@@ -242,9 +270,9 @@ async function handleWithdraw(req, res) {
     signature,
   } = req.body;
 
+  let client;
   try {
-    const client = await pool.connect();
-    await client.query("BEGIN");
+    client = await pool.connect();
 
     const channel = await getChannel(client, principal1, principal2, token);
 
@@ -252,49 +280,78 @@ async function handleWithdraw(req, res) {
       return res.status(403).json({ error: "Channel does not exist." });
     }
 
+    const sender = principal1 === OWNER ? principal2 : principal1;
+
     if (BigInt(nonce) <= BigInt(channel.nonce)) {
       return res.status(409).json({ error: "Nonce conflict." });
     }
 
-    // Validate the withdrawal action
+    // Verify that the withdrawal is valid
+    const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
+      getBalances(principal1, OWNER, balance1, balance2, channel);
+    if (
+      myPrevBalance !== myBalance ||
+      theirPrevBalance - BigInt(amount) !== theirBalance
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Invalid deposit balance.", channel });
+    }
+
+    // Verify the deposit signature
+    const signatureBuffer = Buffer.from(signature, "hex");
     const isValid = verifySignature(
-      signature,
-      { balance1, balance2, nonce, amount },
-      principal2
+      signatureBuffer,
+      sender,
+      token,
+      OWNER,
+      sender,
+      myBalance,
+      theirBalance,
+      nonce,
+      ACTION.WITHDRAW,
+      sender,
+      null,
+      NETWORK
     );
 
     if (!isValid) {
-      return res.status(403).json({ error: "Invalid withdraw signature." });
+      return res.status(403).json({ error: "Invalid deposit signature." });
     }
 
-    // Add the signature to the database
+    // Respond with the owner's signature
     const ownerSignature = generateSignature(
-      { balance1, balance2, nonce, amount },
-      principal1
-    );
-    await insertSignatures(
-      client,
-      channel.id,
-      balance1,
-      balance2,
+      PRIVATE_KEY,
+      token,
+      OWNER,
+      sender,
+      myBalance,
+      theirBalance,
       nonce,
-      "withdraw",
-      principal2,
+      ACTION.WITHDRAW,
+      sender,
       null,
-      ownerSignature,
-      signature
+      NETWORK
     );
+    const ownerSignatureString = ownerSignature.toString("hex");
 
-    await client.query("COMMIT");
-    res.status(200).json({ signature: ownerSignature });
+    res.status(200).json({ signature: ownerSignatureString });
   } catch (error) {
-    console.error("Error handling withdraw:", error.message);
+    console.error("Error handling deposit:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    client.release();
   }
 }
 
+/// Handle POST /api/close
+/// This function is responsible for handling the closure of a channel. It
+/// will validate the balances and nonce and then verify the signature. If the
+/// signature is valid, it will return a signature from the owner. The channel
+/// state will be updated once the `close` function is successfully called.
 async function handleClose(req, res) {
   const {
+    amount,
     token,
     "principal-1": principal1,
     "principal-2": principal2,
@@ -304,9 +361,9 @@ async function handleClose(req, res) {
     signature,
   } = req.body;
 
+  let client;
   try {
-    const client = await pool.connect();
-    await client.query("BEGIN");
+    client = await pool.connect();
 
     const channel = await getChannel(client, principal1, principal2, token);
 
@@ -314,44 +371,64 @@ async function handleClose(req, res) {
       return res.status(403).json({ error: "Channel does not exist." });
     }
 
+    const sender = principal1 === OWNER ? principal2 : principal1;
+
     if (BigInt(nonce) <= BigInt(channel.nonce)) {
       return res.status(409).json({ error: "Nonce conflict." });
     }
 
-    // Validate the close action
+    // Verify that the closure is valid
+    const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
+      getBalances(principal1, OWNER, balance1, balance2, channel);
+    if (myPrevBalance !== myBalance || theirPrevBalance !== theirBalance) {
+      return res
+        .status(403)
+        .json({ error: "Invalid deposit balance.", channel });
+    }
+
+    // Verify the deposit signature
+    const signatureBuffer = Buffer.from(signature, "hex");
     const isValid = verifySignature(
-      signature,
-      { balance1, balance2, nonce },
-      principal2
+      signatureBuffer,
+      sender,
+      token,
+      OWNER,
+      sender,
+      myBalance,
+      theirBalance,
+      nonce,
+      ACTION.CLOSE,
+      sender,
+      null,
+      NETWORK
     );
 
     if (!isValid) {
-      return res.status(403).json({ error: "Invalid close signature." });
+      return res.status(403).json({ error: "Invalid deposit signature." });
     }
 
-    // Add the signature to the database
+    // Respond with the owner's signature
     const ownerSignature = generateSignature(
-      { balance1, balance2, nonce },
-      principal1
-    );
-    await insertSignatures(
-      client,
-      channel.id,
-      balance1,
-      balance2,
+      PRIVATE_KEY,
+      token,
+      OWNER,
+      sender,
+      myBalance,
+      theirBalance,
       nonce,
-      "close",
-      principal2,
+      ACTION.CLOSE,
+      sender,
       null,
-      ownerSignature,
-      signature
+      NETWORK
     );
+    const ownerSignatureString = ownerSignature.toString("hex");
 
-    await client.query("COMMIT");
-    res.status(200).json({ signature: ownerSignature });
+    res.status(200).json({ signature: ownerSignatureString });
   } catch (error) {
-    console.error("Error handling close:", error.message);
+    console.error("Error handling deposit:", error.message);
     res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    client.release();
   }
 }
 
