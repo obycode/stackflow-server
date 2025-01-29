@@ -53,7 +53,7 @@ async function handleTransfer(req, res) {
 
     const channel = await getChannel(client, principal1, principal2, token);
     if (!channel) {
-      return res.status(403).json({ error: "Channel does not exist." });
+      return res.status(404).json({ error: "Channel does not exist." });
     }
 
     const sender = principal1 === OWNER ? principal2 : principal1;
@@ -73,7 +73,7 @@ async function handleTransfer(req, res) {
       theirPrevBalance - BigInt(amount) !== theirBalance
     ) {
       return res
-        .status(403)
+        .status(409)
         .json({ error: "Invalid transfer balance.", channel });
     }
 
@@ -186,7 +186,7 @@ async function handleDeposit(req, res) {
     const channel = await getChannel(client, principal1, principal2, token);
 
     if (!channel) {
-      return res.status(403).json({ error: "Channel does not exist." });
+      return res.status(404).json({ error: "Channel does not exist." });
     }
 
     const sender = principal1 === OWNER ? principal2 : principal1;
@@ -203,7 +203,7 @@ async function handleDeposit(req, res) {
       theirPrevBalance + BigInt(amount) !== theirBalance
     ) {
       return res
-        .status(403)
+        .status(409)
         .json({ error: "Invalid deposit balance.", channel });
     }
 
@@ -277,7 +277,7 @@ async function handleWithdraw(req, res) {
     const channel = await getChannel(client, principal1, principal2, token);
 
     if (!channel) {
-      return res.status(403).json({ error: "Channel does not exist." });
+      return res.status(404).json({ error: "Channel does not exist." });
     }
 
     const sender = principal1 === OWNER ? principal2 : principal1;
@@ -294,7 +294,7 @@ async function handleWithdraw(req, res) {
       theirPrevBalance - BigInt(amount) !== theirBalance
     ) {
       return res
-        .status(403)
+        .status(409)
         .json({ error: "Invalid deposit balance.", channel });
     }
 
@@ -368,7 +368,7 @@ async function handleClose(req, res) {
     const channel = await getChannel(client, principal1, principal2, token);
 
     if (!channel) {
-      return res.status(403).json({ error: "Channel does not exist." });
+      return res.status(404).json({ error: "Channel does not exist." });
     }
 
     const sender = principal1 === OWNER ? principal2 : principal1;
@@ -382,7 +382,7 @@ async function handleClose(req, res) {
       getBalances(principal1, OWNER, balance1, balance2, channel);
     if (myPrevBalance !== myBalance || theirPrevBalance !== theirBalance) {
       return res
-        .status(403)
+        .status(409)
         .json({ error: "Invalid deposit balance.", channel });
     }
 
