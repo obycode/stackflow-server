@@ -146,10 +146,124 @@ async function insertSignatures(
   );
 }
 
+async function insertPendingSignatures(
+  client,
+  channelId,
+  balance1,
+  balance2,
+  nonce,
+  action,
+  actor,
+  hashedSecret,
+  ownerSignature,
+  otherSignature,
+  dependsOnChannel,
+  dependsOnNonce
+) {
+  await client.query(
+    `
+    INSERT INTO pending_signatures (
+      channel, balance_1, balance_2, nonce, action, actor, hashed_secret, owner_signature, other_signature, depends_on_channel, depends_on_nonce
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (channel)
+    DO UPDATE SET
+      balance_1 = EXCLUDED.balance_1,
+      balance_2 = EXCLUDED.balance_2,
+      nonce = EXCLUDED.nonce,
+      action = EXCLUDED.action,
+      actor = EXCLUDED.actor,
+      hashed_secret = EXCLUDED.hashed_secret,
+      owner_signature = EXCLUDED.owner_signature,
+      other_signature = EXCLUDED.other_signature,
+      depends_on_channel = EXCLUDED.depends_on_channel,
+      depends_on_nonce = EXCLUDED.depends_on_nonce;
+    `,
+    [
+      channelId,
+      balance1.toString(),
+      balance2.toString(),
+      nonce.toString(),
+      action,
+      actor,
+      hashedSecret,
+      ownerSignature,
+      otherSignature,
+      dependsOnChannel,
+      dependsOnNonce,
+    ]
+  );
+}
+
+async function confirmSignatures(client, channelId, nonce, secret) {
+  try {
+    await client.query("BEGIN");
+
+    // Step 1: Retrieve the pending signature
+    const selectQuery = `
+      SELECT * FROM pending_signatures
+      WHERE depends_on_channel = $1 AND depends_on_nonce = $2
+      FOR UPDATE; -- Locks row to prevent race conditions
+    `;
+    const { rows } = await client.query(selectQuery, [channelId, nonce]);
+
+    if (rows.length === 0) {
+      await client.query("ROLLBACK");
+      console.error("No matching pending signature found.");
+      return null;
+    }
+
+    const pendingSignature = rows[0];
+
+    // Step 2: Verify the secret hash
+    const secretHash = crypto.createHash("sha256").update(secret).digest("hex");
+
+    if (secretHash !== pendingSignature.secret_hash) {
+      await client.query("ROLLBACK");
+      console.error("Secret does not match the expected hash.");
+      return null;
+    }
+
+    // Step 3: Move to `signatures` table
+    const insertQuery = `
+      INSERT INTO signatures (channel, balance_1, balance_2, nonce, action, actor, secret, owner_signature, other_signature)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *;
+    `;
+    const insertValues = [
+      pendingSignature.channel,
+      pendingSignature.balance_1,
+      pendingSignature.balance_2,
+      pendingSignature.nonce,
+      pendingSignature.action,
+      pendingSignature.actor,
+      secret, // Store the actual secret, not the hash
+      pendingSignature.owner_signature,
+      pendingSignature.other_signature,
+    ];
+    const insertedRow = await client.query(insertQuery, insertValues);
+
+    // Step 4: Delete from `pending_signatures`
+    const deleteQuery = `
+      DELETE FROM pending_signatures WHERE id = $1;
+    `;
+    await client.query(deleteQuery, [pendingSignature.id]);
+
+    await client.query("COMMIT");
+    return insertedRow.rows[0]; // Return the newly inserted row
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("Error moving pending signature:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   getChannel,
   insertChannel,
   updateChannel,
   getSignatures,
   insertSignatures,
+  insertPendingSignatures,
+  confirmSignatures,
 };

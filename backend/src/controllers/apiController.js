@@ -12,19 +12,7 @@ const {
   insertSignatures,
   updateChannel,
 } = require("../services/channelService");
-
-function getBalances(principal1, owner, balance1, balance2, channel) {
-  const isOwnerFirst = principal1 === owner;
-
-  return {
-    myBalance: BigInt(isOwnerFirst ? balance1 : balance2),
-    theirBalance: BigInt(isOwnerFirst ? balance2 : balance1),
-    myPrevBalance: BigInt(isOwnerFirst ? channel.balance_1 : channel.balance_2),
-    theirPrevBalance: BigInt(
-      isOwnerFirst ? channel.balance_2 : channel.balance_1
-    ),
-  };
-}
+const { identifyBalances } = require("../utils/common");
 
 /// Handle POST /api/transfer
 /// This function is responsible for handling a transfer to `OWNER` from a
@@ -66,7 +54,7 @@ async function handleTransfer(req, res) {
     // We will only automatically sign off on an incoming transfer. The
     // new balances must be correct.
     const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
-      getBalances(principal1, OWNER, balance1, balance2, channel);
+      identifyBalances(principal1, OWNER, balance1, balance2, channel);
 
     if (
       myPrevBalance + BigInt(amount) !== myBalance ||
@@ -118,20 +106,6 @@ async function handleTransfer(req, res) {
     );
     const ownerSignatureString = ownerSignature.toString("hex");
 
-    // Add the signature to the database
-    await insertSignatures(
-      client,
-      channel.id,
-      balance1,
-      balance2,
-      nonce,
-      ACTION.TRANSFER,
-      sender,
-      hashedSecret,
-      ownerSignatureString,
-      signature.toString("hex")
-    );
-
     // Update the channel state
     await updateChannel(
       client,
@@ -147,8 +121,51 @@ async function handleTransfer(req, res) {
       // Logic to initiate the next transfer hop
       console.log("Initiating next hop for the transfer:", nextHop);
 
-      // TODO: Trigger next-hop transfer logic here
+      if (!hashedSecret) {
+        return res
+          .status(400)
+          .json({ error: "Hashed secret is required for transfer flow." });
+      }
+
+      // TODO: Trigger next-hop transfer logic here, including special case for the last hop.
       // Decrypt the `nextHops[nextHop]` to get the next hop's details.
+      let nextHopChannel;
+
+      // Add the pending signature to the database
+      await insertPendingSignatures(
+        client,
+        channel.id,
+        balance1,
+        balance2,
+        nonce,
+        ACTION.TRANSFER,
+        sender,
+        hashedSecret,
+        ownerSignatureString,
+        signature.toString("hex"),
+        nextHopChannel.id,
+        nextHopChannel.nonce
+      );
+    } else {
+      if (hashedSecret) {
+        return res.status(400).json({
+          error: "Cannot require a secret without any next hops data.",
+        });
+      }
+
+      // Add the signature to the database
+      await insertSignatures(
+        client,
+        channel.id,
+        balance1,
+        balance2,
+        nonce,
+        ACTION.TRANSFER,
+        sender,
+        null,
+        ownerSignatureString,
+        signature.toString("hex")
+      );
     }
 
     await client.query("COMMIT");
@@ -197,7 +214,7 @@ async function handleDeposit(req, res) {
 
     // Verify that the deposit is valid
     const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
-      getBalances(principal1, OWNER, balance1, balance2, channel);
+      identifyBalances(principal1, OWNER, balance1, balance2, channel);
     if (
       myPrevBalance !== myBalance ||
       theirPrevBalance + BigInt(amount) !== theirBalance
@@ -288,7 +305,7 @@ async function handleWithdraw(req, res) {
 
     // Verify that the withdrawal is valid
     const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
-      getBalances(principal1, OWNER, balance1, balance2, channel);
+      identifyBalances(principal1, OWNER, balance1, balance2, channel);
     if (
       myPrevBalance !== myBalance ||
       theirPrevBalance - BigInt(amount) !== theirBalance
@@ -379,7 +396,7 @@ async function handleClose(req, res) {
 
     // Verify that the closure is valid
     const { myBalance, theirBalance, myPrevBalance, theirPrevBalance } =
-      getBalances(principal1, OWNER, balance1, balance2, channel);
+      identifyBalances(principal1, OWNER, balance1, balance2, channel);
     if (myPrevBalance !== myBalance || theirPrevBalance !== theirBalance) {
       return res
         .status(409)

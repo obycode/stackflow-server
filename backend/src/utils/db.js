@@ -41,6 +41,24 @@ async function createTables() {
       );
     `);
 
+    // Create `pending_signatures` table if it doesn't exist
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS pending_signatures (
+        id SERIAL PRIMARY KEY,
+        channel INTEGER NOT NULL UNIQUE REFERENCES channels(id) ON DELETE CASCADE,
+        balance_1 TEXT,
+        balance_2 TEXT,
+        nonce TEXT,
+        action BIGINT,
+        actor TEXT,
+        secret_hash TEXT,
+        owner_signature TEXT,
+        other_signature TEXT,
+        depends_on_channel INTEGER REFERENCES channels(id) ON DELETE CASCADE,
+        depends_on_nonce TEXT
+      );
+    `);
+
     await client.query("COMMIT");
     console.log("Tables created successfully or already exist.");
   } catch (error) {

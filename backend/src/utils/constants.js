@@ -7,6 +7,7 @@ const {
 
 const CHANNEL_STATE = {
   OPEN: "open",
+  CLOSING: "closing",
   CLOSED: "closed",
 };
 
@@ -21,6 +22,7 @@ const OWNER = process.env.OWNER_ADDRESS;
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 const STACKFLOW_CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS;
 const STACKFLOW_CONTRACT_NAME = process.env.CONTRACT_NAME;
+const STACKFLOW_CONTRACT = `${STACKFLOW_CONTRACT_ADDRESS}.${STACKFLOW_CONTRACT_NAME}`;
 
 function getNetwork() {
   const networkName = process.env.STACKS_NETWORK;
@@ -63,6 +65,7 @@ module.exports = {
   PRIVATE_KEY,
   STACKFLOW_CONTRACT_ADDRESS,
   STACKFLOW_CONTRACT_NAME,
+  STACKFLOW_CONTRACT,
   NETWORK,
   STACKS_API_KEY,
 };

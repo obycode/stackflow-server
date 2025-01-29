@@ -1,5 +1,13 @@
 const { verifySecret } = require("../utils/auth");
-const { CHANNEL_STATE, ACTION, OWNER } = require("../utils/constants");
+const {
+  CHANNEL_STATE,
+  ACTION,
+  OWNER,
+  STACKFLOW_CONTRACT_ADDRESS,
+  STACKFLOW_CONTRACT,
+  STACKFLOW_CONTRACT_NAME,
+  PRIVATE_KEY,
+} = require("../utils/constants");
 const pool = require("../utils/db");
 const {
   getChannel,
@@ -8,6 +16,14 @@ const {
   getSignatures,
   insertSignatures,
 } = require("../services/channelService");
+const {
+  Pc,
+  Cl,
+  makeContractCall,
+  broadcastTransaction,
+} = require("@stacks/transactions");
+const { identifyBalances } = require("../utils/common");
+const { post } = require("../routes/ownerRoutes");
 
 const EVENTS = {
   FUND_CHANNEL: "fund-channel",
@@ -231,21 +247,81 @@ async function handleForceCancel(client, data) {
       return; // Skip further processing for this event
     }
 
+    // Set the state of this channel to `closing`
+    await updateChannel(
+      client,
+      channel.id,
+      balance1,
+      balance2,
+      nonce,
+      expiresAt,
+      CHANNEL_STATE.CLOSING
+    );
+
     // Retrieve the saved signatures we have for the channel
     const signatures = await getSignatures(client, channel.id);
 
-    // If we have signatures, submit a call to `dispute-closure`
+    // If we have good signatures, submit a call to `dispute-closure`
     if (signatures) {
-      // If our balance is higher than the cancellation balance, we can dispute
+      // If our balance is higher than the cancellation balance, we should
+      // dispute the closure
       const cancelBalance = OWNER === principal1 ? balance1 : balance2;
-      const signatureBalance =
+      const myBalance =
         OWNER === principal1 ? signatures.balance_1 : signatures.balance_2;
+      const theirBalance =
+        OWNER === principal1 ? signatures.balance_2 : signatures.balance_1;
 
-      if (BigInt(signatureBalance) > BigInt(cancelBalance)) {
-        // Submit a call to the contract to dispute the closure
-        console.info(`Disputing channel closure`);
+      if (
+        BigInt(myBalance) > BigInt(cancelBalance) &&
+        BigInt(signatures.nonce) > BigInt(nonce)
+      ) {
+        // Build a contract call to the contract to dispute the closure
+        console.info("Disputing channel closure");
 
-        // TODO: make call to `dispute-closure`
+        // Setup args and post-conditions for a call to `dispute-closure`
+        let withdrawPc = Pc.principal(STACKFLOW_CONTRACT).willSendGte(
+          balance1 + balance2
+        );
+        if (token) {
+          // TODO: withdrawPc.ft()
+        } else {
+          withdrawPc.ustx();
+        }
+
+        const txOptions = {
+          contractAddress: STACKFLOW_CONTRACT_ADDRESS,
+          contractName: STACKFLOW_CONTRACT_NAME,
+          functionName: "dispute-closure",
+          functionArgs: [
+            getTokenCV(token),
+            Cl.principal(sender),
+            Cl.uint(myBalance),
+            Cl.uint(theirBalance),
+            Cl.uint(signatures.nonce),
+            Cl.uint(signatures.action),
+            Cl.bufferFromHex(signatures.owner_signature),
+            Cl.bufferFromHex(signatures.other_signature),
+            signatures.actor
+              ? Cl.some(Cl.principal(signatures.actor))
+              : Cl.none(),
+            signatures.secret
+              ? Cl.some(Cl.buffer(signatures.secret))
+              : Cl.none(),
+          ],
+          postConditions: [withdrawPc],
+          senderKey: PRIVATE_KEY,
+          NETWORK,
+        };
+        const transaction = await makeContractCall(txOptions);
+
+        // Submit the transaction
+        const response = await broadcastTransaction({
+          transaction,
+          network: NETWORK,
+        });
+        if (response.error) {
+          console.error(`Error submitting transaction: ${response.error}`);
+        }
       }
     }
   } else {
@@ -259,7 +335,7 @@ async function handleForceCancel(client, data) {
       balance2,
       nonce,
       expiresAt,
-      CHANNEL_STATE.OPEN
+      CHANNEL_STATE.CLOSING
     );
     console.warn(`New channel created for force-cancel event`);
   }
@@ -292,30 +368,87 @@ async function handleForceClose(client, data) {
   }
 
   const channel = await getChannel(client, principal1, principal2, token);
-
   if (channel) {
     // Check if the channel is currently open
     if (channel.state !== CHANNEL_STATE.OPEN) {
       console.warn(
-        `force-cancel event for a channel in state ${channel.state}.`
+        `force-close event for a channel in state ${channel.state}.`
       );
       return; // Skip further processing for this event
     }
+
+    // Set the state of this channel to `closing`
+    await updateChannel(
+      client,
+      channel.id,
+      balance1,
+      balance2,
+      nonce,
+      expiresAt,
+      CHANNEL_STATE.CLOSING
+    );
 
     const signatures = await getSignatures(client, channel.id);
 
     // If we have signatures, submit a call to `dispute-closure`
     if (signatures) {
-      // If our balance is higher than the cancellation balance, we can dispute
-      const cancelBalance = OWNER === principal1 ? balance1 : balance2;
+      // If our balance is higher than the closure balance, we should
+      // dispute the closure
+      const closeBalance = OWNER === principal1 ? balance1 : balance2;
       const signatureBalance =
         OWNER === principal1 ? signatures.balance_1 : signatures.balance_2;
 
-      if (BigInt(signatureBalance) > BigInt(cancelBalance)) {
+      if (
+        BigInt(signatureBalance) > BigInt(cancelBalance) &&
+        BigInt(signatures.nonce) > BigInt(nonce)
+      ) {
         // Submit a call to the contract to dispute the closure
         console.info(`Disputing channel closure`);
 
-        // TODO: make call to `dispute-closure`
+        // Setup args and post-conditions for a call to `dispute-closure`
+        let withdrawPc = Pc.principal(STACKFLOW_CONTRACT).willSendGte(
+          balance1 + balance2
+        );
+        if (token) {
+          // TODO: withdrawPc.ft()
+        } else {
+          withdrawPc.ustx();
+        }
+
+        const txOptions = {
+          contractAddress: STACKFLOW_CONTRACT_ADDRESS,
+          contractName: STACKFLOW_CONTRACT_NAME,
+          functionName: "dispute-closure",
+          functionArgs: [
+            getTokenCV(token),
+            Cl.principal(sender),
+            Cl.uint(myBalance),
+            Cl.uint(theirBalance),
+            Cl.uint(signatures.nonce),
+            Cl.uint(signatures.action),
+            Cl.bufferFromHex(signatures.owner_signature),
+            Cl.bufferFromHex(signatures.other_signature),
+            signatures.actor
+              ? Cl.some(Cl.principal(signatures.actor))
+              : Cl.none(),
+            signatures.secret
+              ? Cl.some(Cl.buffer(signatures.secret))
+              : Cl.none(),
+          ],
+          postConditions: [withdrawPc],
+          senderKey: PRIVATE_KEY,
+          NETWORK,
+        };
+        const transaction = await makeContractCall(txOptions);
+
+        // Submit the transaction
+        const response = await broadcastTransaction({
+          transaction,
+          network: NETWORK,
+        });
+        if (response.error) {
+          console.error(`Error submitting transaction: ${response.error}`);
+        }
       }
     }
   } else {
@@ -329,7 +462,7 @@ async function handleForceClose(client, data) {
       balance2,
       nonce,
       expiresAt,
-      CHANNEL_STATE.OPEN
+      CHANNEL_STATE.CLOSING
     );
     console.warn(`New channel created for force-close event`);
   }
@@ -460,12 +593,8 @@ async function handleDeposit(client, data) {
     console.warn(`New channel created for deposit event`);
   }
 
-  let ownerSignature = mySignature;
-  let otherSignature = theirSignature;
-  if (sender !== OWNER) {
-    ownerSignature = theirSignature;
-    otherSignature = mySignature;
-  }
+  let ownerSignature = sender === OWNER ? mySignature : theirSignature;
+  let otherSignature = sender === OWNER ? theirSignature : mySignature;
 
   // Save the signatures for the channel
   await insertSignatures(
@@ -550,12 +679,8 @@ async function handleWithdraw(client, data) {
     console.warn(`New channel created for withdraw event`);
   }
 
-  let ownerSignature = mySignature;
-  let otherSignature = theirSignature;
-  if (sender !== OWNER) {
-    ownerSignature = theirSignature;
-    otherSignature = mySignature;
-  }
+  let ownerSignature = sender === OWNER ? mySignature : theirSignature;
+  let otherSignature = sender === OWNER ? theirSignature : mySignature;
 
   // Save the signatures for the channel
   await insertSignatures(
@@ -633,6 +758,15 @@ async function handleDisputeClosure(client, data) {
 
 const handleDisputeClosureEvent = (req, res) =>
   processEvent(req, res, EVENTS.DISPUTE_CLOSURE, handleDisputeClosure);
+
+function getTokenCV(token) {
+  if (!token) {
+    return Cl.none();
+  }
+
+  const [address, contractName] = token.split(".");
+  return Cl.some(Cl.contractPrincipal(address, contractName));
+}
 
 module.exports = {
   handleFundChannelEvent,
